@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Funnel Leak Diagnosis — Application</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400;1,600;1,700&family=DM+Mono:wght@300;400;500&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html{scroll-behavior:smooth;}
+
+:root{
+  --bg:#110a0f;
+  --bg-warm:#1c1218;
+  --bg-card:#1a1016;
+  --ink:#ede5e5;
+  --ink-70:#c9bfbf;
+  --ink-45:#8c8080;
+  --ink-20:#4a3f42;
+  --ink-10:#2e2228;
+  --ember:#d7b375;
+  --ember-deep:#b88fd0;
+  --ember-mid:#e4caee;
+  --ember-pale:rgba(215,179,229,.1);
+  --ember-border:rgba(215,179,229,.25);
+  --gold:#e8c993;
+  --gold-pale:rgba(232,201,147,.1);
+  --border:#2e2228;
+  --border-mid:#3d2f36;
+  --success:#6dbf9e;
+  --success-pale:rgba(109,191,158,.12);
+  --mono:'DM Mono',monospace;
+  --serif:'Cormorant Garamond',serif;
+  --sans:'Outfit',sans-serif;
+}
+
+body{
+  font-family:var(--sans);
+  background:var(--bg);
+  color:var(--ink);
+  min-height:100vh;
+  line-height:1.7;
+}
+
+/* noise overlay */
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events:none;z-index:999;opacity:.4;
+}
+
+/* ── TOP BAR ── */
+.topbar{
+  position:fixed;top:0;left:0;right:0;z-index:200;
+  background:rgba(17,10,15,.94);backdrop-filter:blur(16px);
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 max(24px,5vw);height:54px;
+}
+.topbar-logo{
+  font-family:var(--serif);font-weight:600;font-size:16px;color:var(--ink);
+}
+.topbar-logo span{color:var(--ember);font-style:italic;}
+.topbar-label{
+  font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ink-45);
+}
+
+/* ── PROGRESS BAR ── */
+.progress-wrap{
+  position:fixed;top:54px;left:0;right:0;z-index:199;
+  background:var(--border);height:3px;
+}
+.progress-fill{
+  height:100%;background:var(--ember);
+  transition:width .4s cubic-bezier(.4,0,.2,1);
+}
+
+/* ── MAIN LAYOUT ── */
+.page{
+  max-width:760px;margin:0 auto;
+  padding:110px max(24px,5vw) 80px;
+  min-height:100vh;
+  display:flex;flex-direction:column;
+}
+
+/* ── STAGE INDICATOR ── */
+.stage-pill{
+  display:inline-flex;align-items:center;gap:8px;
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ember);border:1px solid var(--ember-border);
+  padding:5px 14px;border-radius:1px;margin-bottom:20px;
+  width:fit-content;
+}
+.stage-dot{width:5px;height:5px;border-radius:50%;background:var(--ember);}
+
+/* ── STEP ── */
+.step{display:none;flex-direction:column;flex:1;animation:fadeUp .35s ease forwards;}
+.step.active{display:flex;}
+@keyframes fadeUp{
+  from{opacity:0;transform:translateY(16px);}
+  to{opacity:1;transform:translateY(0);}
+}
+
+.step-counter{
+  font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ink-20);margin-bottom:10px;
+}
+
+.q-label{
+  font-family:var(--serif);font-weight:700;
+  font-size:clamp(26px,4vw,40px);line-height:1.1;
+  letter-spacing:-.02em;color:var(--ink);
+  margin-bottom:10px;
+}
+.q-label em{font-style:italic;color:var(--ember);}
+
+.q-hint{
+  font-size:14px;font-weight:300;color:var(--ink-45);
+  line-height:1.7;margin-bottom:32px;max-width:560px;
+}
+
+/* ── INPUT TYPES ── */
+textarea, input[type="text"], input[type="email"], input[type="url"], select{
+  width:100%;
+  background:var(--bg-card);
+  border:1px solid var(--border-mid);
+  border-radius:2px;
+  padding:14px 16px;
+  font-family:var(--sans);font-size:15px;font-weight:300;
+  color:var(--ink);line-height:1.6;
+  transition:border-color .18s,box-shadow .18s;
+  resize:vertical;
+  outline:none;
+  -webkit-appearance:none;
+}
+textarea:focus, input[type="text"]:focus, input[type="email"]:focus, input[type="url"]:focus, select:focus{
+  border-color:var(--ember);
+  box-shadow:0 0 0 3px var(--ember-pale);
+}
+textarea{min-height:120px;}
+select{cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238c8080' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:36px;}
+
+/* ── CHOICE CARDS ── */
+.choices{display:flex;flex-direction:column;gap:10px;}
+.choices.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+
+.choice{
+  display:flex;align-items:flex-start;gap:14px;
+  padding:16px 18px;
+  background:var(--bg-card);
+  border:1px solid var(--border);border-radius:2px;
+  cursor:pointer;
+  transition:border-color .18s,background .18s,transform .12s;
+  user-select:none;
+}
+.choice:hover{border-color:var(--border-mid);transform:translateX(2px);}
+.choice.selected{
+  border-color:var(--ember);
+  background:var(--ember-pale);
+}
+.choice-radio{
+  width:18px;height:18px;border-radius:50%;
+  border:1.5px solid var(--border-mid);
+  display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;margin-top:1px;
+  transition:border-color .18s;
+}
+.choice.selected .choice-radio{border-color:var(--ember);}
+.choice-radio-dot{
+  width:8px;height:8px;border-radius:50%;
+  background:var(--ember);opacity:0;
+  transition:opacity .18s,transform .18s;
+  transform:scale(.5);
+}
+.choice.selected .choice-radio-dot{opacity:1;transform:scale(1);}
+.choice-checkbox{
+  width:18px;height:18px;border-radius:1px;
+  border:1.5px solid var(--border-mid);
+  display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;margin-top:1px;
+  transition:border-color .18s,background .18s;
+  font-size:11px;color:#fff;font-weight:700;
+}
+.choice.selected .choice-checkbox{border-color:var(--ember);background:var(--ember);}
+.choice-body{}
+.choice-body strong{
+  display:block;font-weight:500;font-size:14px;
+  color:var(--ink);margin-bottom:2px;
+}
+.choice-body span{font-size:13px;color:var(--ink-45);font-weight:300;line-height:1.5;}
+
+/* ── SCALE ── */
+.scale-wrap{margin-bottom:8px;}
+.scale-labels{
+  display:flex;justify-content:space-between;
+  font-family:var(--mono);font-size:10px;letter-spacing:.06em;
+  color:var(--ink-20);margin-bottom:10px;
+}
+.scale-btns{display:flex;gap:8px;}
+.scale-btn{
+  flex:1;height:44px;
+  background:var(--bg-card);border:1px solid var(--border);
+  border-radius:2px;cursor:pointer;
+  font-family:var(--mono);font-size:13px;color:var(--ink-45);font-weight:500;
+  transition:border-color .18s,background .18s,color .18s;
+}
+.scale-btn:hover{border-color:var(--border-mid);}
+.scale-btn.selected{background:var(--ember);border-color:var(--ember);color:#fff;}
+
+/* ── INPUT PAIR ── */
+.input-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.input-group{display:flex;flex-direction:column;gap:6px;}
+.input-group label{
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-45);
+}
+
+/* ── NOTICE ── */
+.notice{
+  padding:16px 18px;
+  background:var(--gold-pale);border:1px solid rgba(192,154,82,.25);
+  border-left:3px solid var(--gold);border-radius:2px;
+  font-size:13px;color:var(--ink-70);line-height:1.6;
+  margin-top:20px;font-weight:300;
+}
+.notice strong{color:var(--ink);font-weight:500;}
+
+/* ── NAVIGATION ── */
+.nav-row{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-top:40px;padding-top:28px;
+  border-top:1px solid var(--border);
+}
+.btn-back{
+  display:inline-flex;align-items:center;gap:6px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-45);background:none;border:none;cursor:pointer;
+  transition:color .18s;padding:0;
+}
+.btn-back:hover{color:var(--ink);}
+.btn-next{
+  display:inline-flex;align-items:center;gap:10px;
+  background:var(--ember);color:#110a0f;border:none;
+  padding:14px 28px;border-radius:2px;
+  font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;
+  cursor:pointer;transition:background .18s,transform .12s,opacity .18s;
+}
+.btn-next:hover{background:var(--ember-mid);transform:translateY(-1px);}
+.btn-next:disabled{opacity:.35;cursor:not-allowed;transform:none;}
+
+/* ── SECTION DIVIDER ── */
+.section-divider{
+  display:flex;align-items:center;gap:14px;
+  margin:28px 0 24px;
+}
+.section-divider-line{flex:1;height:1px;background:var(--border);}
+.section-divider-label{
+  font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-20);white-space:nowrap;
+}
+
+/* ── REVIEW SCREEN ── */
+.review-section{
+  margin-bottom:28px;
+  padding:24px 26px;
+  background:var(--bg-card);
+  border:1px solid var(--border);border-radius:2px;
+  border-left:3px solid var(--border);
+}
+.review-section-title{
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ember);margin-bottom:16px;
+  display:flex;align-items:center;gap:8px;
+}
+.review-section-title::before{content:'';display:inline-block;width:16px;height:1px;background:var(--ember);}
+.review-row{
+  display:flex;gap:20px;
+  padding:10px 0;border-bottom:1px solid var(--border);
+}
+.review-row:last-child{border-bottom:none;padding-bottom:0;}
+.rr-q{
+  font-size:12px;color:var(--ink-45);font-weight:300;
+  flex:0 0 160px;line-height:1.5;
+}
+.rr-a{
+  font-size:13px;color:var(--ink);font-weight:400;
+  flex:1;line-height:1.6;
+}
+
+/* ── SUCCESS ── */
+.success-screen{
+  display:none;flex-direction:column;align-items:center;
+  justify-content:center;flex:1;text-align:center;
+  padding:60px 0;
+}
+.success-screen.active{display:flex;}
+.success-icon{
+  width:72px;height:72px;border-radius:50%;
+  background:var(--ink);
+  display:flex;align-items:center;justify-content:center;
+  margin-bottom:32px;
+  font-size:28px;
+  border:1px solid rgba(255,255,255,.1);
+}
+.success-screen h2{
+  font-family:var(--serif);font-weight:700;font-style:italic;
+  font-size:clamp(32px,5vw,52px);line-height:1.1;
+  letter-spacing:-.025em;color:var(--ink);margin-bottom:16px;
+}
+.success-screen h2 em{color:var(--ember);}
+.success-screen p{
+  font-size:16px;font-weight:300;color:var(--ink-45);
+  max-width:440px;line-height:1.8;margin-bottom:10px;
+}
+.success-next-steps{
+  margin-top:40px;padding:28px 32px;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:2px;
+  text-align:left;max-width:480px;width:100%;
+}
+.sns-title{
+  font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ember);margin-bottom:16px;
+}
+.sns-item{
+  display:flex;gap:12px;align-items:flex-start;
+  margin-bottom:14px;font-size:14px;color:var(--ink-70);line-height:1.6;font-weight:300;
+}
+.sns-item:last-child{margin-bottom:0;}
+.sns-num{
+  font-family:var(--mono);font-size:11px;color:var(--ink-20);
+  flex-shrink:0;margin-top:2px;
+}
+
+/* ── CHAR COUNTER ── */
+.field-wrap{position:relative;}
+.char-count{
+  font-family:var(--mono);font-size:10px;letter-spacing:.04em;
+  color:var(--ink-20);text-align:right;margin-top:5px;
+}
+
+/* ── REQUIRED MARKER ── */
+.req{color:var(--ember);margin-left:3px;}
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="topbar-logo">Janice <span>Montales</span></div>
+  <div class="topbar-label">Funnel Leak Diagnosis — Application</div>
+</div>
+
+<!-- PROGRESS -->
+<div class="progress-wrap">
+  <div class="progress-fill" id="progressBar" style="width:0%"></div>
+</div>
+
+<!-- MAIN -->
+<div class="page">
+
+  <!-- ══ STEP 0: INTRO ══ -->
+  <div class="step active" id="step-0">
+    <div class="stage-pill"><span class="stage-dot"></span>Before We Begin</div>
+    <div class="step-counter">Introduction</div>
+    <div class="q-label">This isn't a form.<br>It's a <em>diagnostic intake.</em></div>
+    <div class="q-hint">Every question below is designed to surface the exact stage where your funnel breaks down. Be specific. The more precise your answers, the more precise the diagnosis.<br><br>This takes <strong style="color:var(--ink);font-weight:500;">10–15 minutes.</strong> Set aside focused time — vague answers produce vague results.</div>
+
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:8px;">
+      <div class="input-group">
+        <label>Your Full Name <span class="req">*</span></label>
+        <input type="text" id="name" placeholder="First and last name">
+      </div>
+      <div class="input-group">
+        <label>Email Address <span class="req">*</span></label>
+        <input type="email" id="email" placeholder="you@yourbusiness.com">
+      </div>
+      <div class="input-group">
+        <label>Your Business / Brand Name</label>
+        <input type="text" id="brand" placeholder="What do you call your coaching business?">
+      </div>
+      <div class="input-group">
+        <label>What type of coaching do you offer? <span class="req">*</span></label>
+        <input type="text" id="coachtype" placeholder="e.g. Business coaching, health coaching, mindset, career…">
+      </div>
+      <div class="input-group">
+        <label>Who is your target client? <span class="req">*</span></label>
+        <textarea id="targetclient" placeholder="Describe them specifically — their situation, what they're struggling with, and what they're trying to achieve." style="min-height:90px;"></textarea>
+      </div>
+      <div class="input-group">
+        <label>Price point of your core offer</label>
+        <select id="pricepoint">
+          <option value="" disabled selected>Select a range</option>
+          <option>Under $1,000</option>
+          <option>$1,000 – $2,999</option>
+          <option>$3,000 – $5,999</option>
+          <option>$6,000 – $9,999</option>
+          <option>$10,000 – $14,999</option>
+          <option>$15,000+</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="notice">
+      <strong>Why this matters:</strong> Understanding your offer price and target client helps calibrate what conversion rates are realistic — and where friction is most costly for your specific funnel economics.
+    </div>
+
+    <div class="nav-row">
+      <span></span>
+      <button class="btn-next" onclick="goNext(0)">Begin Diagnosis →</button>
+    </div>
+  </div>
+
+  <!-- ══ STEP 1: TRAFFIC ══ -->
+  <div class="step" id="step-1">
+    <div class="stage-pill"><span class="stage-dot"></span>Stage 1 of 5 — Traffic</div>
+    <div class="step-counter">Questions 1–4</div>
+    <div class="q-label"><em>Where</em> are your leads coming from?</div>
+    <div class="q-hint">Traffic quality and source determines message match expectations before a lead ever sees your opt-in. A mismatch here creates friction that compounds through every downstream stage.</div>
+
+    <!-- Q1 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q1 — Primary traffic source <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">What is the main source sending people into your funnel right now?</div>
+      <div class="choices" id="traffic-source">
+        <div class="choice" onclick="selectChoice(this,'traffic-source','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Organic social (Instagram, Facebook, LinkedIn, TikTok)</strong><span>Posts, stories, or reels — no paid spend</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'traffic-source','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Paid social ads (Meta, TikTok, LinkedIn Ads)</strong><span>Paid campaigns driving to a funnel entry point</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'traffic-source','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Referrals / word of mouth</strong><span>Past clients, partners, or affiliates sending leads</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'traffic-source','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Email list / existing audience</strong><span>Sending campaigns to a warm list you've already built</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'traffic-source','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Podcast / YouTube / content SEO</strong><span>Long-form content driving organic inbound</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'traffic-source','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Mixed / I'm not sure</strong><span>Multiple sources or unclear which is dominant</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q2 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q2 — Traffic volume</div>
+      <div class="q-hint" style="margin-bottom:14px;">Approximately how many people enter your funnel (reach your opt-in page or first touchpoint) each month?</div>
+      <div class="choices" id="traffic-vol">
+        <div class="choice" onclick="selectChoice(this,'traffic-vol','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Fewer than 50 people/month</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'traffic-vol','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>50 – 200 people/month</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'traffic-vol','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>200 – 500 people/month</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'traffic-vol','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>500 – 1,000+ people/month</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'traffic-vol','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>I don't track this</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q3 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q3 — Message match <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">What specific promise, outcome, or pain point are you using to attract leads from your traffic source? Copy the exact headline, hook, or call-to-action you use most. This is critical for diagnosing message mismatch.</div>
+      <div class="field-wrap">
+        <textarea id="traffic-hook" placeholder="e.g. 'Download the free guide: 5 Steps to Book 3 Clients This Month Without Paid Ads' — or describe your content hook / ad headline." maxlength="600" oninput="countChars(this,'tc1')"></textarea>
+        <div class="char-count" id="tc1">0 / 600</div>
+      </div>
+    </div>
+
+    <!-- Q4 -->
+    <div style="margin-bottom:8px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q4 — Traffic consistency</div>
+      <div class="q-hint" style="margin-bottom:14px;">How would you describe your traffic right now?</div>
+      <div class="choices" id="traffic-consistency">
+        <div class="choice" onclick="selectChoice(this,'traffic-consistency','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Consistent — steady flow every week</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'traffic-consistency','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Inconsistent — spikes and dead weeks</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'traffic-consistency','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Just starting — still building</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="nav-row">
+      <button class="btn-back" onclick="goBack(1)">← Back</button>
+      <button class="btn-next" onclick="goNext(1)">Next: Opt-in →</button>
+    </div>
+  </div>
+
+  <!-- ══ STEP 2: OPT-IN ══ -->
+  <div class="step" id="step-2">
+    <div class="stage-pill"><span class="stage-dot"></span>Stage 2 of 5 — Opt-in &amp; Lead Capture</div>
+    <div class="step-counter">Questions 5–9</div>
+    <div class="q-label">What happens when a lead <em>first arrives?</em></div>
+    <div class="q-hint">The opt-in stage is where most coaches experience their first major drop-off. The breakdown is almost never design — it's a promise mismatch or a trust gap between where the lead came from and what they're being asked to do.</div>
+
+    <!-- Q5 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q5 — Lead capture mechanism <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">What are you offering in exchange for someone's email or contact info?</div>
+      <div class="choices" id="lead-capture">
+        <div class="choice" onclick="selectChoice(this,'lead-capture','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Free guide / PDF / checklist</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'lead-capture','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Free webinar / masterclass / workshop</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'lead-capture','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Free video training / mini course</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'lead-capture','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Free quiz or assessment</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'lead-capture','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Direct booking — no lead magnet, straight to call</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'lead-capture','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Something else</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q6 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q6 — Opt-in page headline <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">What is the exact headline on your opt-in or landing page? If you don't have one, describe what you say when inviting someone to opt in.</div>
+      <div class="field-wrap">
+        <textarea id="optin-headline" placeholder="Paste your exact opt-in page headline here. If it's a direct booking page, paste the headline from that page." maxlength="400" oninput="countChars(this,'tc2')" style="min-height:80px;"></textarea>
+        <div class="char-count" id="tc2">0 / 400</div>
+      </div>
+    </div>
+
+    <!-- Q7 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q7 — Estimated opt-in conversion rate</div>
+      <div class="q-hint" style="margin-bottom:14px;">Of 100 people who reach your opt-in page, roughly how many give you their contact info?</div>
+      <div class="choices" id="optin-rate">
+        <div class="choice" onclick="selectChoice(this,'optin-rate','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Under 10%</strong><span>Fewer than 10 out of 100 opt in</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'optin-rate','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>10% – 25%</strong><span>Below average — possible message mismatch</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'optin-rate','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>25% – 40%</strong><span>Average range for most coaching funnels</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'optin-rate','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>40%+</strong><span>Strong opt-in — leak likely downstream</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'optin-rate','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>I don't track this</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q8 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q8 — What happens immediately after opt-in? <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">The 60 seconds after a lead opts in is one of the highest-leverage moments in the entire funnel. What do they experience?</div>
+      <div class="choices" id="post-optin">
+        <div class="choice" onclick="selectChoice(this,'post-optin','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Thank you page with immediate call booking prompt</strong><span>They can book a call right after opting in</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'post-optin','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Thank you page — no booking option, just confirmation</strong><span>They're told to check their email</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'post-optin','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Immediate redirect to video or training content</strong><span>They go straight into the value content</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'post-optin','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Nothing structured — they get an email later</strong><span>No immediate next step on-page</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q9 -->
+    <div style="margin-bottom:8px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q9 — Message continuity check <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">Does the promise on your opt-in page directly match the promise you made in your traffic source (your ad, post, or content)? In your own words, describe any gap you notice — or whether you think they match.</div>
+      <div class="field-wrap">
+        <textarea id="msg-continuity" placeholder="e.g. 'My ad promises X but my opt-in page talks about Y instead' or 'I think they match because both say Z.'" maxlength="500" oninput="countChars(this,'tc3')"></textarea>
+        <div class="char-count" id="tc3">0 / 500</div>
+      </div>
+    </div>
+
+    <div class="nav-row">
+      <button class="btn-back" onclick="goBack(2)">← Back</button>
+      <button class="btn-next" onclick="goNext(2)">Next: Nurture →</button>
+    </div>
+  </div>
+
+  <!-- ══ STEP 3: NURTURE ══ -->
+  <div class="step" id="step-3">
+    <div class="stage-pill"><span class="stage-dot"></span>Stage 3 of 5 — Nurture &amp; Follow-Up</div>
+    <div class="step-counter">Questions 10–15</div>
+    <div class="q-label">What happens between <em>opt-in and call?</em></div>
+    <div class="q-hint">This is the most neglected stage in most coaching funnels. Leads who don't book a call immediately go cold here — not because they're not interested, but because there's no system keeping them warm or moving them forward.</div>
+
+    <!-- Q10 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q10 — Email nurture sequence <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">Do you have an automated email sequence that goes out after someone opts in?</div>
+      <div class="choices" id="email-seq">
+        <div class="choice" onclick="selectChoice(this,'email-seq','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Yes — automated sequence (3+ emails)</strong><span>They receive a series of pre-written emails automatically</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'email-seq','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Yes — but only 1–2 emails (delivery + one follow-up)</strong><span>Minimal sequence — drops off quickly</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'email-seq','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Manual only — I send emails myself when I remember</strong><span>No automation in place</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'email-seq','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>No email follow-up at all</strong><span>Leads opt in and receive nothing further</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q11 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q11 — Email sequence goal</div>
+      <div class="q-hint" style="margin-bottom:14px;">If you have a nurture sequence, what is the primary purpose of those emails?</div>
+      <div class="choices" id="email-goal">
+        <div class="choice" onclick="selectChoice(this,'email-goal','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Drive them to book a discovery / strategy call</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'email-goal','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Deliver value / build trust (no direct CTA)</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'email-goal','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Sell directly via email (direct offer / sales email)</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'email-goal','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>A mix / not clearly defined</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'email-goal','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>N/A — no email sequence</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q12 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q12 — Nurture open / engagement rate</div>
+      <div class="q-hint" style="margin-bottom:14px;">If you have an email sequence, what's your average open rate? (Check your email platform.)</div>
+      <div class="choices" id="email-open">
+        <div class="choice" onclick="selectChoice(this,'email-open','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Under 20% — low engagement</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'email-open','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>20–35% — average</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'email-open','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>35%+ — good engagement</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'email-open','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>I don't check / don't have email nurture</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q13 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q13 — Lead behaviour observation <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">After leads opt in, what do you observe? Select all that apply.</div>
+      <div class="choices" id="lead-behavior">
+        <div class="choice" onclick="selectChoice(this,'lead-behavior','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>They engage with emails but don't book calls</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'lead-behavior','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>They go quiet after the first email or two</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'lead-behavior','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>They DM me on social but don't book formally</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'lead-behavior','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>Some book calls but many no-show</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'lead-behavior','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>I lose track of leads — no clear visibility</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'lead-behavior','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>Most who engage do book calls</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q14 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q14 — Re-engagement / follow-up system</div>
+      <div class="q-hint" style="margin-bottom:14px;">For leads who opt in but don't book a call within the first week — what happens to them?</div>
+      <div class="choices" id="reengagement">
+        <div class="choice" onclick="selectChoice(this,'reengagement','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>They receive a re-engagement sequence automatically</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'reengagement','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>I follow up manually with some of them</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'reengagement','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>They sit in my list and receive general broadcasts</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'reengagement','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Nothing — they go cold and stay cold</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q15 -->
+    <div style="margin-bottom:8px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q15 — Nurture content assessment <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">Briefly describe what your nurture emails say. What topics do they cover, and what is the main ask (if any) in each email?</div>
+      <div class="field-wrap">
+        <textarea id="nurture-content" placeholder="e.g. 'Email 1: delivers the PDF. Email 2: shares a client story. Email 3: invites them to book a free call. After that — nothing.' Be honest about what's actually in your sequence." maxlength="700" oninput="countChars(this,'tc4')"></textarea>
+        <div class="char-count" id="tc4">0 / 700</div>
+      </div>
+    </div>
+
+    <div class="nav-row">
+      <button class="btn-back" onclick="goBack(3)">← Back</button>
+      <button class="btn-next" onclick="goNext(3)">Next: Call Booking →</button>
+    </div>
+  </div>
+
+  <!-- ══ STEP 4: CALL BOOKING ══ -->
+  <div class="step" id="step-4">
+    <div class="stage-pill"><span class="stage-dot"></span>Stage 4 of 5 — Call Booking</div>
+    <div class="step-counter">Questions 16–21</div>
+    <div class="q-label">How are leads getting <em>on your calendar?</em></div>
+    <div class="q-hint">Call booking is statistically the biggest drop-off point in coaching funnels. The gap between "interested lead" and "person on a call" is where most revenue quietly dies — and it's almost never about the quality of the lead.</div>
+
+    <!-- Q16 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q16 — Call booking mechanism <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">How do leads actually book a call with you?</div>
+      <div class="choices" id="booking-mech">
+        <div class="choice" onclick="selectChoice(this,'booking-mech','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Automated booking page (Calendly, TidyCal, etc.)</strong><span>They self-schedule with no back-and-forth</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'booking-mech','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Application form → I reach out to schedule</strong><span>They apply first, then I contact them to book</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'booking-mech','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>DM / email exchange to schedule manually</strong><span>No booking tool — all done via back-and-forth</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'booking-mech','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Mixed — depends on where the lead comes from</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q17 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q17 — Call booking page / CTA <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">What does the call booking CTA say? What are you calling the call, and what are you promising people will happen on it?</div>
+      <div class="field-wrap">
+        <textarea id="booking-cta" placeholder="e.g. 'Book a Free Strategy Call — we'll map out your roadmap to 6 figures' or 'Schedule Your Funnel Review.' Paste the exact language you use to invite people to book." maxlength="500" oninput="countChars(this,'tc5')" style="min-height:90px;"></textarea>
+        <div class="char-count" id="tc5">0 / 500</div>
+      </div>
+    </div>
+
+    <!-- Q18 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q18 — Pre-call qualification</div>
+      <div class="q-hint" style="margin-bottom:14px;">Do you qualify leads before they get on a call?</div>
+      <div class="choices" id="prequalify">
+        <div class="choice" onclick="selectChoice(this,'prequalify','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Yes — they complete an application with qualifying questions</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'prequalify','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Minimal — just name and email to book</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'prequalify','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>No qualification — anyone can book</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q19 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q19 — No-show rate</div>
+      <div class="q-hint" style="margin-bottom:14px;">Of calls that get booked, how many actually show up?</div>
+      <div class="choices" id="noshow">
+        <div class="choice" onclick="selectChoice(this,'noshow','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Almost everyone shows (under 10% no-show)</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'noshow','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Occasional no-shows (10–25%)</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'noshow','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Frequent no-shows (25–50%)</strong><span>Significant pre-call friction or weak commitment signal</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'noshow','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>More than half don't show up</strong><span>Systemic issue in pre-call sequence or booking flow</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'noshow','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>I don't get enough bookings to measure this</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q20 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q20 — Pre-call confirmation sequence</div>
+      <div class="q-hint" style="margin-bottom:14px;">After someone books a call, what do they receive before the call?</div>
+      <div class="choices" id="precall">
+        <div class="choice" onclick="selectChoice(this,'precall','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>Automated confirmation email only</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'precall','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>Reminder emails (24hr + 1hr before)</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'precall','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>Pre-call video or "what to expect" page</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'precall','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>SMS / text reminder</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'precall','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>Nothing beyond the calendar invite</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q21 -->
+    <div style="margin-bottom:8px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q21 — Booking friction observation <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">In your own words: where do you think the biggest drop-off happens in getting leads to actually book a call? What have you noticed or heard from leads who didn't book?</div>
+      <div class="field-wrap">
+        <textarea id="booking-friction" placeholder="e.g. 'They say they'll book but never do' / 'They seem interested but the price stops them before they even get on a call' / 'I think the booking page is confusing.'" maxlength="600" oninput="countChars(this,'tc6')"></textarea>
+        <div class="char-count" id="tc6">0 / 600</div>
+      </div>
+    </div>
+
+    <div class="nav-row">
+      <button class="btn-back" onclick="goBack(4)">← Back</button>
+      <button class="btn-next" onclick="goNext(4)">Next: Call → Close →</button>
+    </div>
+  </div>
+
+  <!-- ══ STEP 5: CLOSE ══ -->
+  <div class="step" id="step-5">
+    <div class="stage-pill"><span class="stage-dot"></span>Stage 5 of 5 — Call &amp; Close</div>
+    <div class="step-counter">Questions 22–27</div>
+    <div class="q-label">What happens <em>on the call</em> and after?</div>
+    <div class="q-hint">The close stage reveals whether your conversion problem is systemic (upstream) or structural (in the call itself). Most coaches who get this far have one of three issues: an unqualified lead, a weak call structure, or a follow-up gap post-call.</div>
+
+    <!-- Q22 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q22 — Call structure <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">Do you have a defined structure for your discovery or sales call?</div>
+      <div class="choices" id="call-structure">
+        <div class="choice" onclick="selectChoice(this,'call-structure','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Yes — I follow a consistent, scripted framework</strong><span>Every call follows the same flow: rapport, diagnosis, pitch, close</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'call-structure','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Somewhat — I have a rough outline but I improvise a lot</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'call-structure','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>No structure — every call is different</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q23 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q23 — Call-to-close rate</div>
+      <div class="q-hint" style="margin-bottom:14px;">Of the calls you complete (excluding no-shows), roughly what percentage become paying clients?</div>
+      <div class="choices" id="close-rate">
+        <div class="choice" onclick="selectChoice(this,'close-rate','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Under 20%</strong><span>Fewer than 1 in 5 calls closes</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'close-rate','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>20% – 40%</strong><span>Below average — likely a call structure or qualification issue</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'close-rate','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>40% – 60%</strong><span>Average for well-qualified coaching calls</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'close-rate','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>60%+</strong><span>Strong close — issue is likely upstream (bookings, not closes)</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'close-rate','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>I don't track this</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q24 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q24 — Most common objections <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">What do leads say when they don't buy? Select all that apply.</div>
+      <div class="choices" id="objections">
+        <div class="choice" onclick="selectChoice(this,'objections','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>"I need to think about it"</strong><span>Non-committal — usually means unclear value or unaddressed fear</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'objections','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>"I can't afford it right now"</strong><span>Price objection — could be real or perceived value gap</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'objections','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>"I need to talk to my partner / spouse"</strong><span>Decision-maker objection — often a proxy for hesitation</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'objections','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>"I'm not sure this is the right fit"</strong><span>Trust or specificity gap — the offer doesn't feel tailored enough</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'objections','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>"I've tried things like this before and it didn't work"</strong><span>Past failure / skepticism objection</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'objections','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>They say yes on the call but ghost before payment</strong><span>Post-call dropout — follow-up gap</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'objections','multi')">
+          <div class="choice-checkbox"></div>
+          <div class="choice-body"><strong>I don't make an offer — I'm not sure how to transition to the pitch</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q25 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q25 — Post-call follow-up</div>
+      <div class="q-hint" style="margin-bottom:14px;">When someone says "let me think about it" at the end of a call — what happens next?</div>
+      <div class="choices" id="postcall">
+        <div class="choice" onclick="selectChoice(this,'postcall','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Structured follow-up sequence (email + check-in over 5–7 days)</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'postcall','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>I send one follow-up email and leave it</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'postcall','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>I follow up manually when I think of it</strong></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'postcall','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>I don't follow up — if they want it they'll reach out</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q26 -->
+    <div style="margin-bottom:28px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q26 — Where do you think your biggest leak is? <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">Based on everything you've seen, where do you believe the most revenue is being lost in your funnel right now?</div>
+      <div class="choices" id="self-diagnosis">
+        <div class="choice" onclick="selectChoice(this,'self-diagnosis','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Traffic → Opt-in</strong><span>Not enough people are opting in</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'self-diagnosis','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Opt-in → Call booked</strong><span>Leads opt in but don't book calls</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'self-diagnosis','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Booked → Actually shows up</strong><span>People book then don't show</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'self-diagnosis','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>Call → Closed client</strong><span>Calls happen but don't convert to clients</span></div>
+        </div>
+        <div class="choice" onclick="selectChoice(this,'self-diagnosis','single')">
+          <div class="choice-radio"><div class="choice-radio-dot"></div></div>
+          <div class="choice-body"><strong>I genuinely don't know — that's why I'm here</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Q27 -->
+    <div style="margin-bottom:8px;">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-20);margin-bottom:8px;">Q27 — Anything else I should know? <span class="req">*</span></div>
+      <div class="q-hint" style="margin-bottom:14px;">Is there anything specific about your funnel, your situation, or your results that doesn't fit neatly into the questions above? What's the one thing you most want me to look at?</div>
+      <div class="field-wrap">
+        <textarea id="final-notes" placeholder="e.g. 'I recently changed my offer price and bookings dropped.' / 'I'm launching a new funnel in 2 weeks.' / 'I had a period of good results last year and can't figure out what changed.'" maxlength="800" oninput="countChars(this,'tc7')"></textarea>
+        <div class="char-count" id="tc7">0 / 800</div>
+      </div>
+    </div>
+
+    <div class="nav-row">
+      <button class="btn-back" onclick="goBack(5)">← Back</button>
+      <button class="btn-next" onclick="goNext(5)">Review My Answers →</button>
+    </div>
+  </div>
+
+  <!-- ══ STEP 6: REVIEW ══ -->
+  <div class="step" id="step-6">
+    <div class="stage-pill"><span class="stage-dot"></span>Final Step</div>
+    <div class="step-counter">Review &amp; Submit</div>
+    <div class="q-label">Review your answers <em>before submitting.</em></div>
+    <div class="q-hint">Take a moment to check your responses. Once submitted, I'll begin analyzing your funnel within 24–48 hours.</div>
+
+    <div id="review-content"></div>
+
+    <div class="notice" style="margin-bottom:0;">
+      <strong>What happens next:</strong> After you submit, I'll review every answer and build your Funnel Leak Diagnosis Report — your 3 biggest revenue leaks, stage-by-stage breakdown, and a prioritized fix list. Expect your report within <strong>24–48 hours</strong> to the email you provided.
+    </div>
+
+    <div class="nav-row">
+      <button class="btn-back" onclick="goBack(6)">← Edit Answers</button>
+      <button class="btn-next" onclick="submitForm()">Submit My Application →</button>
+    </div>
+  </div>
+
+  <!-- ══ SUCCESS ══ -->
+  <div class="success-screen" id="success">
+    <div class="success-icon">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M6 16l7 7L26 9" stroke="#e8c993" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <h2>Your application is <em>submitted.</em></h2>
+    <p>I have everything I need to diagnose your funnel. You'll receive your Funnel Leak Diagnosis Report within 24–48 hours.</p>
+    <p style="font-size:14px;">Keep an eye on <strong id="confirm-email" style="color:var(--ink);font-weight:500;"></strong> — that's where your report will land.</p>
+    <div class="success-next-steps">
+      <div class="sns-title">What happens next</div>
+      <div class="sns-item">
+        <span class="sns-num">01 —</span>
+        I analyze your full money path using your answers — traffic source through close.
+      </div>
+      <div class="sns-item">
+        <span class="sns-num">02 —</span>
+        I identify your 3 biggest revenue leaks and the specific conversion points causing them.
+      </div>
+      <div class="sns-item">
+        <span class="sns-num">03 —</span>
+        You receive a clear, actionable report with a prioritized fix list — no vague recommendations.
+      </div>
+    </div>
+  </div>
+
+</div><!-- /page -->
+
+<script>
+const TOTAL_STEPS = 6;
+let answers = {};
+
+function updateProgress(step){
+  const pct = step === 0 ? 4 : Math.round((step / TOTAL_STEPS) * 100);
+  document.getElementById('progressBar').style.width = pct + '%';
+}
+
+function selectChoice(el, groupId, mode){
+  if(mode === 'single'){
+    document.querySelectorAll(`#${groupId} .choice`).forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+  } else {
+    el.classList.toggle('selected');
+  }
+  storeGroupAnswer(groupId, mode);
+}
+
+function storeGroupAnswer(groupId, mode){
+  const selected = [...document.querySelectorAll(`#${groupId} .choice.selected`)];
+  const vals = selected.map(c => c.querySelector('.choice-body strong').textContent);
+  answers[groupId] = mode === 'single' ? vals[0] : vals;
+}
+
+function countChars(el, counterId){
+  document.getElementById(counterId).textContent = `${el.value.length} / ${el.getAttribute('maxlength')}`;
+}
+
+function getFieldVal(id){
+  const el = document.getElementById(id);
+  return el ? el.value.trim() : '';
+}
+
+function goNext(from){
+  // collect text inputs
+  if(from === 0){
+    answers.name = getFieldVal('name');
+    answers.email = getFieldVal('email');
+    answers.brand = getFieldVal('brand');
+    answers.coachtype = getFieldVal('coachtype');
+    answers.targetclient = getFieldVal('targetclient');
+    answers.pricepoint = document.getElementById('pricepoint').value;
+    if(!answers.name || !answers.email || !answers.coachtype || !answers.targetclient){
+      alert('Please fill in the required fields (marked with ✦) before continuing.');
+      return;
+    }
+  }
+  if(from === 1){
+    answers['traffic-hook'] = getFieldVal('traffic-hook');
+  }
+  if(from === 2){
+    answers['optin-headline'] = getFieldVal('optin-headline');
+    answers['msg-continuity'] = getFieldVal('msg-continuity');
+  }
+  if(from === 3){
+    answers['nurture-content'] = getFieldVal('nurture-content');
+  }
+  if(from === 4){
+    answers['booking-cta'] = getFieldVal('booking-cta');
+    answers['booking-friction'] = getFieldVal('booking-friction');
+  }
+  if(from === 5){
+    answers['final-notes'] = getFieldVal('final-notes');
+    buildReview();
+  }
+
+  const currentStep = document.getElementById(`step-${from}`);
+  const nextStep = document.getElementById(`step-${from + 1}`);
+  currentStep.classList.remove('active');
+  nextStep.classList.add('active');
+  updateProgress(from + 1);
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function goBack(from){
+  document.getElementById(`step-${from}`).classList.remove('active');
+  document.getElementById(`step-${from - 1}`).classList.add('active');
+  updateProgress(from - 1);
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function buildReview(){
+  const sections = [
+    {
+      title:'About You',
+      rows:[
+        ['Name', answers.name || '—'],
+        ['Email', answers.email || '—'],
+        ['Business', answers.brand || '—'],
+        ['Coaching type', answers.coachtype || '—'],
+        ['Target client', answers.targetclient || '—'],
+        ['Offer price point', answers.pricepoint || '—'],
+      ]
+    },
+    {
+      title:'Stage 1 — Traffic',
+      rows:[
+        ['Primary source', answers['traffic-source'] || '—'],
+        ['Monthly volume', answers['traffic-vol'] || '—'],
+        ['Traffic hook / headline', answers['traffic-hook'] || '—'],
+        ['Traffic consistency', answers['traffic-consistency'] || '—'],
+      ]
+    },
+    {
+      title:'Stage 2 — Opt-in',
+      rows:[
+        ['Lead capture mechanism', answers['lead-capture'] || '—'],
+        ['Opt-in headline', answers['optin-headline'] || '—'],
+        ['Opt-in conversion rate', answers['optin-rate'] || '—'],
+        ['Post opt-in experience', answers['post-optin'] || '—'],
+        ['Message continuity', answers['msg-continuity'] || '—'],
+      ]
+    },
+    {
+      title:'Stage 3 — Nurture',
+      rows:[
+        ['Email sequence', answers['email-seq'] || '—'],
+        ['Sequence goal', answers['email-goal'] || '—'],
+        ['Open rate', answers['email-open'] || '—'],
+        ['Lead behaviour', Array.isArray(answers['lead-behavior']) ? answers['lead-behavior'].join('; ') : (answers['lead-behavior'] || '—')],
+        ['Re-engagement system', answers['reengagement'] || '—'],
+        ['Nurture content', answers['nurture-content'] || '—'],
+      ]
+    },
+    {
+      title:'Stage 4 — Call Booking',
+      rows:[
+        ['Booking mechanism', answers['booking-mech'] || '—'],
+        ['Booking CTA', answers['booking-cta'] || '—'],
+        ['Pre-call qualification', answers['prequalify'] || '—'],
+        ['No-show rate', answers['noshow'] || '—'],
+        ['Pre-call sequence', Array.isArray(answers['precall']) ? answers['precall'].join('; ') : (answers['precall'] || '—')],
+        ['Friction observation', answers['booking-friction'] || '—'],
+      ]
+    },
+    {
+      title:'Stage 5 — Call & Close',
+      rows:[
+        ['Call structure', answers['call-structure'] || '—'],
+        ['Call-to-close rate', answers['close-rate'] || '—'],
+        ['Top objections', Array.isArray(answers['objections']) ? answers['objections'].join('; ') : (answers['objections'] || '—')],
+        ['Post-call follow-up', answers['postcall'] || '—'],
+        ['Self-diagnosis', answers['self-diagnosis'] || '—'],
+        ['Additional notes', answers['final-notes'] || '—'],
+      ]
+    }
+  ];
+
+  let html = '';
+  sections.forEach(s => {
+    html += `<div class="review-section"><div class="review-section-title">${s.title}</div>`;
+    s.rows.forEach(r => {
+      html += `<div class="review-row"><div class="rr-q">${r[0]}</div><div class="rr-a">${r[1]}</div></div>`;
+    });
+    html += '</div>';
+  });
+  document.getElementById('review-content').innerHTML = html;
+}
+
+function submitForm(){
+  document.getElementById('step-6').classList.remove('active');
+  document.getElementById('success').classList.add('active');
+  document.getElementById('confirm-email').textContent = answers.email || 'the email you provided';
+  document.getElementById('progressBar').style.width = '100%';
+  window.scrollTo({top:0,behavior:'smooth'});
+  console.log('FORM SUBMISSION:', JSON.stringify(answers, null, 2));
+}
+
+updateProgress(0);
+</script>
+</body>
+</html>
